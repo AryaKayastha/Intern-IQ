@@ -2,7 +2,7 @@
 app/streamlit_app.py
 --------------------
 InternIQ — 7-tab Streamlit Dashboard
-Tabs: Data Quality | EDA | Manager | Mentor | Intern | ML Insights | GenAI Chat
+Tabs: Data Quality | EDA | Manager | Mentor | Intern | ML Insights | Chatbox
 """
 
 import os
@@ -205,45 +205,43 @@ st.divider()
 role = st.session_state.role
 
 role_tabs = {
-    "Manager": ["Manager Dashboard", "EDA", "ML Insights", "GenAI Chat", "Warehouse Analysis"],
-    "Mentor":  ["Mentor Dashboard", "ML Insights", "GenAI Chat"],
-    "Intern":  ["Intern Self-View", "GenAI Chat"]
+    "Manager": ["Manager Dashboard", "EDA", "ML Insights", "Chatbox", "Warehouse Analysis"],
+    "Mentor":  ["Mentor Dashboard", "ML Insights", "Chatbox"],
+    "Intern":  ["Intern Self-View"]
 }
 
 allowed_tab_names = role_tabs.get(role, [])
 
-if "current_nav_manager" not in st.session_state:
-    st.session_state.current_nav_manager = "Manager Dashboard"
+import re
 
-if role == "Manager":
-    st.sidebar.markdown("### Manager Modules")
-    import re
-    def strip_emoji(text):
-        return re.sub(r'^[^\w\s]+\s*', '', text).strip()
-    
-    for t in allowed_tab_names:
-        clean_name = strip_emoji(t)
-        is_active = (st.session_state.current_nav_manager == t)
-        btn_type = "primary" if is_active else "secondary"
-        if st.sidebar.button(clean_name, key=f"nav_{t}", type=btn_type, use_container_width=True):
-            st.session_state.current_nav_manager = t
-            st.rerun()
-            
-    selected_tab = st.session_state.current_nav_manager
-    tab_dict = {selected_tab: st.container()}
-else:
-    rendered_tabs = st.tabs(allowed_tab_names)
-    tab_dict = {name: tab for name, tab in zip(allowed_tab_names, rendered_tabs)}
+def strip_emoji(text):
+    return re.sub(r'^[^\w\s]+\s*', '', text).strip()
+
+# Per-role nav session key
+NAV_KEY = f"current_nav_{role.lower()}" if role else "current_nav"
+if NAV_KEY not in st.session_state:
+    st.session_state[NAV_KEY] = allowed_tab_names[0] if allowed_tab_names else ""
+
+# Sidebar navigation — same pattern for all roles
+role_label = {"Manager": "Manager Modules", "Mentor": "Mentor Modules", "Intern": "Intern Modules"}
+st.sidebar.markdown(f"### {role_label.get(role, 'Navigation')}")
+
+for t in allowed_tab_names:
+    clean_name = strip_emoji(t)
+    is_active = (st.session_state[NAV_KEY] == t)
+    btn_type = "primary" if is_active else "secondary"
+    if st.sidebar.button(clean_name, key=f"nav_{t}", type=btn_type, use_container_width=True):
+        st.session_state[NAV_KEY] = t
+        st.rerun()
+
+selected_tab = st.session_state[NAV_KEY]
+tab_dict = {selected_tab: st.container()}
 
 
 # ── Common UI Helpers ─────────────────────────────────────────────────────────
 def display_header(text: str):
-    if role == "Manager":
-        import re
-        clean_text = re.sub(r'^[^\w\s]+\s*', '', text).strip()
-        st.header(clean_text)
-    else:
-        st.header(text)
+    clean_text = strip_emoji(text)
+    st.header(clean_text)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -420,8 +418,7 @@ def render_tab_manager():
                ROUND(total_hours, 1)       AS total_hours,
                ROUND(avg_progress_pct, 1)  AS avg_progress_pct,
                ROUND(avg_test_pct, 1)      AS avg_test_pct,
-               courses_completed,
-               data_source
+               courses_completed
         FROM gold_intern_performance
         ORDER BY total_hours DESC, avg_progress_pct DESC
     """)
@@ -507,13 +504,25 @@ def render_tab_mentor():
             col2.metric("Avg Progress", f"{mentee_prog['progress_pct'].mean():.1f}%")
             col3.metric("Avg KC Score", f"{mentee_prog['kc_pct'].mean():.1f}%")
 
-            # Progress heatmap per mentee × course
-            st.subheader("Mentee Progress Heatmap")
-            pivot = mentee_prog.pivot_table(index="full_name", columns="course_name",
-                                            values="progress_pct", fill_value=0)
-            fig = px.imshow(pivot, color_continuous_scale="RdYlGn",
-                            title=f"Progress % — {selected_mentor}'s Mentees",
-                            zmin=0, zmax=100)
+            # ── Progress Treemap ──────────────────────────────────────────
+            st.subheader("Mentee Progress — Treemap")
+            treemap_df = mentee_prog.copy()
+            treemap_df["progress_pct"] = treemap_df["progress_pct"].clip(lower=1)  # avoid 0-size tiles
+            fig = px.treemap(
+                treemap_df,
+                path=["course_name", "full_name"],
+                values="progress_pct",
+                color="overall_status",
+                color_discrete_map={
+                    "Completed":   "#22c55e",
+                    "In Progress": "#f59e0b",
+                    "Not Started": "#ef4444",
+                },
+                title=f"Progress % by Course & Intern — {selected_mentor}'s Mentees",
+                hover_data={"progress_pct": True},
+            )
+            fig.update_traces(textinfo="label+value")
+            fig.update_layout(height=420, margin=dict(t=50, l=10, r=10, b=10))
             st.plotly_chart(fig, use_container_width=True)
 
             # Interns needing attention
@@ -528,13 +537,48 @@ def render_tab_mentor():
             else:
                 st.dataframe(at_risk, use_container_width=True)
 
-            # Knowledge Check score heatmap
-            st.subheader("Knowledge Check Score Heatmap")
-            kc_pivot = mentee_prog.pivot_table(index="full_name", columns="course_name",
-                                               values="kc_pct", fill_value=0)
-            fig = px.imshow(kc_pivot, color_continuous_scale="Blues",
-                            title="KC Score % per Mentee × Course")
-            st.plotly_chart(fig, use_container_width=True)
+            # ── KC Score — Faceted Horizontal Bars (one panel per course) ─
+            st.subheader("Knowledge Check Scores per Intern & Course")
+            kc_df = mentee_prog[mentee_prog["kc_pct"].notna()].copy()
+            if not kc_df.empty:
+                # Sort interns by average KC score so top performers appear at top
+                order = (
+                    kc_df.groupby("full_name")["kc_pct"]
+                    .mean()
+                    .sort_values(ascending=True)
+                    .index.tolist()
+                )
+                n_courses = kc_df["course_name"].nunique()
+
+                fig = px.bar(
+                    kc_df,
+                    x="kc_pct",
+                    y="full_name",
+                    facet_col="course_name",
+                    facet_col_wrap=2,
+                    orientation="h",
+                    title="KC Score % per Course (sorted by avg score)",
+                    labels={"full_name": "", "kc_pct": "KC Score (%)"},
+                    color="kc_pct",
+                    color_continuous_scale="RdYlGn",
+                    range_color=[0, 100],
+                    category_orders={"full_name": order},
+                )
+                fig.update_traces(width=0.7)
+                fig.update_layout(
+                    height=520,          # fixed window — pan/zoom within chart
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                )
+                fig.update_xaxes(range=[0, 100])
+                # Red threshold line on every facet
+                for i in range(1, n_courses + 1):
+                    axis = "xaxis" if i == 1 else f"xaxis{i}"
+                fig.add_vline(x=60, line_dash="dash", line_color="#ef4444",
+                              annotation_text="60%", annotation_position="top right")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No KC score data available for this mentor's mentees.")
 
             # Not started
             not_started = mentee_prog[mentee_prog["overall_status"] == "Not Started"]
@@ -672,9 +716,8 @@ def render_tab_ml():
             fig = px.scatter(
                 pca_df, x="pca_x", y="pca_y",
                 color="cluster_label",
-                symbol="data_source",
                 hover_data=["full_name"],
-                title="Intern Clusters (PCA 2D) — shape: real / synthetic",
+                title="Intern Clusters (PCA 2D)",
                 color_discrete_map={
                     "High Performer":    "#22c55e",
                     "Average Performer": "#f59e0b",
@@ -705,10 +748,10 @@ def render_tab_ml():
             reg_df = pd.read_parquet(reg_path)
             fig = px.scatter(
                 reg_df, x="test_pct", y="predicted_test_pct",
-                color="data_source", hover_data=["full_name", "course_name"],
+                color="course_name", hover_data=["full_name", "course_name"],
                 title="Actual vs Predicted Test Score (%)",
                 labels={"test_pct": "Actual Test %", "predicted_test_pct": "Predicted Test %"},
-                color_discrete_map={"real": "#0ea5e9", "synthetic": "#f59e0b"},
+                color_discrete_sequence=px.colors.qualitative.Pastel,
             )
             # Diagonal reference line
             mn = reg_df[["test_pct", "predicted_test_pct"]].min().min()
@@ -726,7 +769,7 @@ def render_tab_ml():
     if os.path.exists(clust_path):
         clust_df = pd.read_parquet(clust_path)
         show_cols = ["full_name", "cluster_label", "total_hours",
-                     "avg_progress_pct", "avg_test_pct", "courses_completed", "data_source"]
+                     "avg_progress_pct", "avg_test_pct", "courses_completed"]
         existing   = [c for c in show_cols if c in clust_df.columns]
         st.dataframe(clust_df[existing].sort_values("total_hours", ascending=False),
                      use_container_width=True)
@@ -799,7 +842,7 @@ def render_tab_ml():
 # Tab 7 — GenAI Chatbot
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_chat():
-    display_header("GenAI Chat")
+    display_header("Chatbox")
     st.markdown("""
     **Ask natural language questions about intern data.**  
     *Examples:*
@@ -813,62 +856,57 @@ def render_tab_chat():
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    # Display chat history
+    # Display full chat history first — so input appears below
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if msg.get("sql"):
                 with st.expander("🔍 SQL Executed"):
                     st.code(msg["sql"], language="sql")
+            if msg.get("rows") and msg.get("columns"):
+                st.dataframe(
+                    pd.DataFrame(msg["rows"], columns=msg["columns"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            if msg.get("llm_src"):
+                badge = "🟢 HuggingFace" if msg["llm_src"] == "huggingface" else "🟡 Ollama (local)"
+                st.caption(badge)
 
-    # Input
+    # Input — below the history so it appears at the bottom
     user_q = st.chat_input("Ask a question about intern performance…")
 
     if user_q:
         st.session_state.chat_history.append({"role": "user", "content": user_q})
-        with st.chat_message("user"):
-            st.markdown(user_q)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Generating SQL and querying live data..."):
-                try:
-                    from genai.chatbot import ask
+        with st.spinner("Generating SQL and querying live data..."):
+            try:
+                from genai.chatbot import ask
 
-                    @st.cache_data(show_spinner=False, ttl=600)
-                    def cached_ask(q):
-                        return ask(q)
+                @st.cache_data(show_spinner=False, ttl=600)
+                def cached_ask(q):
+                    return ask(q)
 
-                    result    = cached_ask(user_q)
-                    answer    = result.get("answer", "No answer generated.")
-                    sql_query = result.get("query")
-                    columns   = result.get("columns", [])
-                    rows      = result.get("rows", [])
-                    llm_src   = result.get("llm_source", "")
-                except Exception as e:
-                    answer    = f"Error during query execution: {e}"
-                    sql_query = None
-                    columns, rows, llm_src = [], [], ""
+                result    = cached_ask(user_q)
+                answer    = result.get("answer", "No answer generated.")
+                sql_query = result.get("query")
+                columns   = result.get("columns", [])
+                rows      = result.get("rows", [])
+                llm_src   = result.get("llm_source", "")
+            except Exception as e:
+                answer    = f"Error during query execution: {e}"
+                sql_query = None
+                columns, rows, llm_src = [], [], ""
 
-            st.markdown(answer)
-
-            # ── Render result as interactive dataframe ────────────────────
-            if rows and columns:
-                st.dataframe(
-                    pd.DataFrame(rows, columns=columns),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-            # ── Show SQL + LLM source ──────────────────────────────────────
-            meta_cols = st.columns([3, 1])
-            if sql_query:
-                with meta_cols[0].expander("🔍 SQL Executed"):
-                    st.code(sql_query, language="sql")
-            if llm_src:
-                badge = "🟢 HuggingFace" if llm_src == "huggingface" else "🟡 Ollama (local)"
-                meta_cols[1].caption(badge)
-
-        st.session_state.chat_history.append({"role": "assistant", "content": answer, "sql": sql_query})
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": answer,
+            "sql": sql_query,
+            "rows": rows,
+            "columns": columns,
+            "llm_src": llm_src,
+        })
+        st.rerun()
 
     if st.button("🗑️ Clear Chat"):
         st.session_state.chat_history = []
@@ -888,8 +926,8 @@ if "Intern Self-View" in tab_dict:
     with tab_dict["Intern Self-View"]: render_tab_intern()
 if "ML Insights" in tab_dict:
     with tab_dict["ML Insights"]: render_tab_ml()
-if "GenAI Chat" in tab_dict:
-    with tab_dict["GenAI Chat"]: render_tab_chat()
+if "Chatbox" in tab_dict:
+    with tab_dict["Chatbox"]: render_tab_chat()
 
 
 # ── Sidebar Bottom Details ────────────────────────────────────────────────────
