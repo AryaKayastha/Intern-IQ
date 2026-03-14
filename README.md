@@ -1,6 +1,5 @@
 # InternIQ Analytics Platform
 
-> **Kenexai Hackathon 2k26 — CHARUSAT, Changa | 24-Hour Round 2**  
 > Intern Activity Intelligence & Productivity Analytics Platform
 
 ---
