@@ -80,9 +80,17 @@ def merge_lms(course_key: str) -> pd.DataFrame:
 def write_bronze(con: duckdb.DuckDBPyConnection,
                  df: pd.DataFrame,
                  table_name: str) -> None:
-    con.execute(f"DROP TABLE IF EXISTS {table_name}")
-    con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df")
-    print(f"  ✔ Bronze table '{table_name}' written ({len(df)} rows)")
+    tables = [r[0] for r in con.execute("SHOW TABLES").fetchall()]
+    if table_name not in tables:
+        con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df")
+        print(f"  ✔ Bronze table '{table_name}' created ({len(df)} rows)")
+    else:
+        con.execute(f"CREATE TEMP TABLE staging AS SELECT * FROM df")
+        # Upsert: Insert rows from staging that aren't already in the target table
+        res = con.execute(f"INSERT INTO {table_name} SELECT * FROM staging EXCEPT SELECT * FROM {table_name}")
+        inserted_count = res.fetchone()[0] if res.description else "unknown"
+        con.execute("DROP TABLE staging")
+        print(f"  ✔ Bronze table '{table_name}' upserted ({inserted_count} new rows added)")
 
 
 def run_ingestion() -> None:
@@ -105,7 +113,6 @@ def run_ingestion() -> None:
 
     con.close()
     print("\n✅ Bronze ingestion complete.\n")
-    return eod_df, lms_dfs
 
 
 if __name__ == "__main__":

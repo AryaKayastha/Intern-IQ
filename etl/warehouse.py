@@ -376,7 +376,17 @@ def run_warehouse() -> None:
     from etl.clean  import clean_eod, clean_lms, explode_mentors
 
     # Step 1 – Ingest (Bronze)
-    eod_raw, lms_raw = run_ingestion()
+    run_ingestion()
+    
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    con = duckdb.connect(DB_PATH)
+
+    # Load complete Bronze layer for Silver/Gold generation
+    eod_raw = con.execute("SELECT * FROM raw_eod_activities").df()
+    
+    lms_raw = {}
+    for key in ["python", "sql", "numpy_pandas", "pyspark"]:
+        lms_raw[key] = con.execute(f"SELECT * FROM raw_lms_{key}").df()
 
     # Step 2 – Clean
     print("\n=== Cleaning Data ===")
@@ -404,8 +414,6 @@ def run_warehouse() -> None:
     mentor_df = pd.concat(mentor_parts, ignore_index=True)
 
     # Step 3 – Silver + Gold
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    con = duckdb.connect(DB_PATH)
     build_silver(con, eod_clean, lms_map, mentor_df)
     build_gold(con)
     print_quality_report(con, eod_clean, lms_map)

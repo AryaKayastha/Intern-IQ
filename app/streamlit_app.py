@@ -89,19 +89,15 @@ section[data-testid="stSidebar"] * { color: #e2e8f0 !important; }
 """, unsafe_allow_html=True)
 
 
-# ── DB connection (cached) ────────────────────────────────────────────────────
-@st.cache_resource
-def get_conn():
-    return duckdb.connect(DB_PATH, read_only=True)
-
-
+# ── DB query execution (cached, auto-closing to avoid locks) ───────────────────
 @st.cache_data(ttl=300)
-def query(_conn, sql: str) -> pd.DataFrame:
-    return _conn.execute(sql).df()
+def query(sql: str) -> pd.DataFrame:
+    with duckdb.connect(DB_PATH, read_only=True) as con:
+        return con.execute(sql).df()
 
 
 def q(sql: str) -> pd.DataFrame:
-    return query(get_conn(), sql)
+    return query(sql)
 
 
 # ── Header ────────────────────────────────────────────────────────────────────

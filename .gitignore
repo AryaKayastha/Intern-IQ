@@ -1,39 +1,32 @@
+# Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
+*$py.class
+*.so
 
-# Virtual environments
-.venv/
-venv/
-env/
-
-# Environment & secrets
+# Environments
 .env
-.env.*
-*.env.local
+.venv
+env/
+venv/
+ENV/
 
-# Logs & local data
-*.log
-logs/
-.pytest_cache/
-.coverage
-coverage.xml
-.mypy_cache/
+# Data
+dataset/
+db/
+*.csv
+*.xlsx
+*.parquet
 
-# OS / editor files
+# Machine Learning
+ml/models/
+
+# GenAI
+genai/chroma_store/
+
+# Jupyter
+.ipynb_checkpoints
+
+# OS Files
 .DS_Store
 Thumbs.db
-.idea/
-.vscode/
-
-# Jupyter / notebooks
-.ipynb_checkpoints/
-
-# Build / dist
-build/
-dist/
-*.egg-info/
-
-# Docker
-.docker/
