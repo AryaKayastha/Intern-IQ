@@ -43,10 +43,6 @@ def daily_refresh_job():
     if not run_script(os.path.join("etl", "warehouse.py"), "ETL Pipeline (Bronze → Silver → Gold)"):
         return
 
-    # 3. Update Vector Embeddings (GenAI Chatbot)
-    if not run_script(os.path.join("genai", "embeddings.py"), "Vector Store Update"):
-        return
-
     # 4. Retrain ML Models (Optional daily, but usually good to keep fresh)
     if not run_script(os.path.join("ml", "train.py"), "ML Model Retraining"):
         return

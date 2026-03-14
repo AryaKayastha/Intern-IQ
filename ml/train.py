@@ -46,12 +46,78 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 def load_data(con: duckdb.DuckDBPyConnection) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Returns:
-        perf_df  : gold_intern_performance (one row per intern)
-        prog_df  : gold_course_progress    (one row per intern × course)
+        perf_df  : Silver layer aggregations (one row per intern, richly dimensional)
+        prog_df  : Silver layer course facts + domain hours
     """
-    perf_df = con.execute("SELECT * FROM gold_intern_performance").df()
-    prog_df = con.execute("SELECT * FROM gold_course_progress").df()
+    # 1. Course Progress Features (prog_df)
+    prog_df = con.execute("""
+        SELECT 
+            f.intern_id,
+            i.full_name,
+            c.course_name,
+            f.progress_pct, 
+            f.assignment_ratio,
+            f.kc_pct, 
+            f.test_pct,
+            f.overall_status,
+            f.data_source
+        FROM fact_lms_progress f
+        JOIN dim_course c ON f.course_id = c.course_id
+        JOIN dim_intern i ON f.intern_id = i.intern_id
+    """).df()
+
+    # Pre-calculate domain hours per intern from fact_eod_log + dim_activity
+    domain_hours = con.execute("""
+        SELECT 
+            f.intern_id,
+            SUM(CASE WHEN a.activity_category = 'SQL' THEN f.hours ELSE 0 END) AS hours_sql,
+            SUM(CASE WHEN a.activity_category = 'PySpark' THEN f.hours ELSE 0 END) AS hours_pyspark,
+            SUM(CASE WHEN a.activity_category = 'NumPy/Pandas' THEN f.hours ELSE 0 END) AS hours_numpy,
+            SUM(CASE WHEN a.activity_category = 'BI/Reporting' THEN f.hours ELSE 0 END) AS hours_bi
+        FROM fact_eod_log f
+        JOIN dim_activity a ON f.activity_id = a.activity_id
+        GROUP BY f.intern_id
+    """).df()
+    
+    # Merge domain hours so classifiers/regressors can correlate domain practice with passing a course
+    prog_df = prog_df.merge(domain_hours, on="intern_id", how="left").fillna(0)
+
+    # 2. Intern Clustering Features (perf_df)
+    perf_df = con.execute("""
+        SELECT 
+            i.intern_id,
+            i.full_name,
+            i.data_source,
+            COALESCE(SUM(f.hours), 0) AS total_hours,
+            COUNT(DISTINCT f.activity_id) AS distinct_activities,
+            SUM(CASE WHEN d.day_of_week IN ('Saturday', 'Sunday') THEN f.hours ELSE 0 END) AS weekend_hours
+        FROM dim_intern i
+        LEFT JOIN fact_eod_log f ON i.intern_id = f.intern_id
+        LEFT JOIN dim_date d ON f.date = d.date
+        GROUP BY i.intern_id, i.full_name, i.data_source
+    """).df()
+    
+    # Merge domain hours directly into the performance df for clustering
+    perf_df = perf_df.merge(domain_hours, on="intern_id", how="left").fillna(0)
+
+    # Add basic LMS aggregations for perf_df
+    prog_agg = con.execute("""
+        SELECT 
+            intern_id,
+            AVG(progress_pct) AS avg_progress_pct,
+            AVG(assignment_ratio) AS avg_assignment_ratio,
+            AVG(kc_pct) AS avg_kc_pct,
+            AVG(test_pct) AS avg_test_pct,
+            COUNT(CASE WHEN overall_status = 'Completed' THEN 1 END) AS courses_completed,
+            COUNT(f.course_id) AS total_activity_entries
+        FROM fact_lms_progress f
+        GROUP BY intern_id
+    """).df()
+    
+    perf_df = perf_df.merge(prog_agg, on="intern_id", how="left").fillna(0)
+    
     return perf_df, prog_df
+
 
 
 # ============================================================================
@@ -67,7 +133,18 @@ def train_classifier(prog_df: pd.DataFrame) -> dict:
     print("\n--- Model 1: Performance Classifier ---")
     df = prog_df.copy()
 
-    feature_cols = ["progress_pct", "assignment_ratio", "kc_pct", "test_pct"]
+    feature_cols = [
+        "progress_pct", "assignment_ratio", "kc_pct", "test_pct",
+        "hours_sql", "hours_pyspark", "hours_numpy", "hours_bi"
+    ]
+    
+    # One-hot encode course_name
+    df = pd.get_dummies(df, columns=["course_name"], drop_first=False, dtype=float)
+    
+    # Combine original features + new dummy columns
+    course_dummy_cols = [c for c in df.columns if c.startswith("course_name_")]
+    feature_cols.extend(course_dummy_cols)
+
     # Fill nulls with 0 for features
     for c in feature_cols:
         if c not in df.columns:
@@ -106,7 +183,8 @@ def train_classifier(prog_df: pd.DataFrame) -> dict:
     # Save
     joblib.dump(clf, os.path.join(MODELS_DIR, "classifier.pkl"))
     joblib.dump(le,  os.path.join(MODELS_DIR, "label_encoder.pkl"))
-    print("  Saved: ml/models/classifier.pkl, ml/models/label_encoder.pkl")
+    joblib.dump(feature_cols, os.path.join(MODELS_DIR, "classifier_features.pkl"))
+    print("  Saved: ml/models/classifier.pkl, label_encoder.pkl, classifier_features.pkl")
     return {"model": clf, "label_encoder": le, "accuracy": acc, "feature_cols": feature_cols}
 
 
@@ -122,7 +200,10 @@ def train_clustering(perf_df: pd.DataFrame) -> dict:
     print("\n--- Model 2: Intern Clustering (K-Means k=3) ---")
     df = perf_df.copy()
 
-    feature_cols = ["total_hours", "distinct_activities", "avg_progress_pct", "avg_assignment_ratio"]
+    feature_cols = [
+        "total_hours", "distinct_activities", "avg_progress_pct", "avg_assignment_ratio",
+        "hours_sql", "hours_pyspark", "hours_numpy", "hours_bi", "weekend_hours"
+    ]
     for c in feature_cols:
         if c not in df.columns:
             df[c] = 0.0
@@ -156,6 +237,7 @@ def train_clustering(perf_df: pd.DataFrame) -> dict:
     # Save pipeline + label map + result df
     joblib.dump(pipeline,          os.path.join(MODELS_DIR, "kmeans_pipeline.pkl"))
     joblib.dump(cluster_label_map, os.path.join(MODELS_DIR, "cluster_label_map.pkl"))
+    joblib.dump(feature_cols,      os.path.join(MODELS_DIR, "clustering_features.pkl"))
 
     # Save cluster assignments for use in dashboard
     cluster_result = df[["intern_id", "full_name", "cluster_raw", "cluster_label",
@@ -182,7 +264,19 @@ def train_regression(prog_df: pd.DataFrame) -> dict:
     df = prog_df.dropna(subset=["test_pct"]).copy()
     print(f"  Rows with test scores: {len(df)} (of {len(prog_df)})")
 
-    feature_cols = ["progress_pct", "kc_pct", "assignment_ratio"]
+    feature_cols = [
+        "progress_pct", "kc_pct", "assignment_ratio",
+        "hours_sql", "hours_pyspark", "hours_numpy", "hours_bi"
+    ]
+    
+    original_course_name = df["course_name"].copy()
+    
+    df = pd.get_dummies(df, columns=["course_name"], drop_first=False, dtype=float)
+    df["course_name"] = original_course_name
+    
+    course_dummy_cols = [c for c in df.columns if c.startswith("course_name_")]
+    feature_cols.extend(course_dummy_cols)
+
     for c in feature_cols:
         if c not in df.columns:
             df[c] = 0.0
@@ -220,7 +314,8 @@ def train_regression(prog_df: pd.DataFrame) -> dict:
     pred_df.to_parquet(os.path.join(MODELS_DIR, "regression_results.parquet"), index=False)
 
     joblib.dump(reg, os.path.join(MODELS_DIR, "regressor.pkl"))
-    print("  Saved: ml/models/regressor.pkl, ml/models/regression_results.parquet")
+    joblib.dump(feature_cols, os.path.join(MODELS_DIR, "regressor_features.pkl"))
+    print("  Saved: ml/models/regressor.pkl, regressor_features.pkl, ml/models/regression_results.parquet")
     return {"model": reg, "r2": r2, "mae": mae, "feature_cols": feature_cols}
 
 
@@ -231,7 +326,10 @@ def train_regression(prog_df: pd.DataFrame) -> dict:
 def compute_pca(perf_df: pd.DataFrame, cluster_df: pd.DataFrame) -> None:
     from sklearn.decomposition import PCA
 
-    feature_cols = ["total_hours", "distinct_activities", "avg_progress_pct", "avg_assignment_ratio"]
+    feature_cols = [
+        "total_hours", "distinct_activities", "avg_progress_pct", "avg_assignment_ratio",
+        "hours_sql", "hours_pyspark", "hours_numpy", "hours_bi", "weekend_hours"
+    ]
     df = perf_df[["intern_id"] + [c for c in feature_cols if c in perf_df.columns]].copy()
     for c in feature_cols:
         if c not in df.columns:
@@ -256,7 +354,7 @@ def compute_pca(perf_df: pd.DataFrame, cluster_df: pd.DataFrame) -> None:
 # ============================================================================
 
 def run_training() -> None:
-    con = duckdb.connect(DB_PATH)
+    con = duckdb.connect(DB_PATH, read_only=True)
     perf_df, prog_df = load_data(con)
     con.close()
 

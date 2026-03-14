@@ -14,11 +14,11 @@ plotly==5.22.0
 scikit-learn==1.5.0
 joblib==1.4.2
 
-# GenAI / RAG
+# GenAI / Text-to-SQL
 langchain==0.2.6
 langchain-community==0.2.6
-chromadb==0.5.0
-sentence-transformers==3.0.1
+SQLAlchemy==2.0.31
+duckdb-engine==0.12.0
 
 # Utility
 python-dotenv==1.0.1

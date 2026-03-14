@@ -205,15 +205,15 @@ st.divider()
 role = st.session_state.role
 
 role_tabs = {
-    "Manager": ["👔 Manager Dashboard", "🔍 EDA", "🤖 ML Insights", "💬 GenAI Chat", "📊 Warehouse Analysis"],
-    "Mentor":  ["👨‍🏫 Mentor Dashboard", "🤖 ML Insights", "💬 GenAI Chat"],
-    "Intern":  ["🎯 Intern Self-View", "💬 GenAI Chat"]
+    "Manager": ["Manager Dashboard", "EDA", "ML Insights", "GenAI Chat", "Warehouse Analysis"],
+    "Mentor":  ["Mentor Dashboard", "ML Insights", "GenAI Chat"],
+    "Intern":  ["Intern Self-View", "GenAI Chat"]
 }
 
 allowed_tab_names = role_tabs.get(role, [])
 
 if "current_nav_manager" not in st.session_state:
-    st.session_state.current_nav_manager = "👔 Manager Dashboard"
+    st.session_state.current_nav_manager = "Manager Dashboard"
 
 if role == "Manager":
     st.sidebar.markdown("### Manager Modules")
@@ -250,7 +250,7 @@ def display_header(text: str):
 # Tab 1 — Data Quality Dashboard
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_data_quality():
-    display_header("📊 Warehouse Analysis")
+    display_header("Warehouse Analysis")
 
     # Row counts per layer
     st.subheader("Row Counts — Medallion Architecture")
@@ -326,7 +326,7 @@ def render_tab_data_quality():
 # Tab 2 — EDA Dashboard
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_eda():
-    display_header("🔍 Exploratory Data Analysis")
+    display_header("Exploratory Data Analysis")
 
     col1, col2 = st.columns(2)
 
@@ -412,7 +412,7 @@ def render_tab_eda():
 # Tab 3 — Manager View
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_manager():
-    display_header("👔 Manager Dashboard")
+    display_header(" Manager Dashboard")
 
     # Intern leaderboard
     lb_df = q("""
@@ -476,7 +476,7 @@ def render_tab_manager():
 # Tab 4 — Mentor View
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_mentor():
-    display_header("👨‍🏫 Mentor Dashboard")
+    display_header("Mentor Dashboard")
 
     if st.session_state.role == "Mentor":
         selected_mentor = st.session_state.real_name
@@ -522,7 +522,7 @@ def render_tab_mentor():
                 (mentee_prog["overall_status"] != "Completed")
             ][["full_name", "course_name", "progress_pct", "overall_status"]].drop_duplicates()
 
-            st.subheader("⚠️ Interns Needing Attention (Progress < 50%)")
+            st.subheader("Interns Needing Attention (Progress < 50%)")
             if at_risk.empty:
                 st.success("All mentees are on track! 🎉")
             else:
@@ -556,7 +556,7 @@ def render_tab_mentor():
 # Tab 5 — Intern View
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_intern():
-    display_header("🎯 Intern Self-View")
+    display_header("Intern Self-View")
 
     if st.session_state.role == "Intern":
         selected_intern = st.session_state.real_name
@@ -656,7 +656,7 @@ def render_tab_intern():
 # Tab 6 — ML Insights
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_ml():
-    display_header("🤖 ML Insights")
+    display_header("ML Insights")
 
     MODELS_DIR = os.path.join(ROOT, "ml", "models")
 
@@ -734,18 +734,47 @@ def render_tab_ml():
     # Live prediction widget
     st.subheader("🔮 Live Prediction — Enter Intern Stats")
     with st.form("predict_form"):
+        st.markdown("**1. Course Progress & Performance**")
         fc1, fc2, fc3, fc4 = st.columns(4)
         prog_pct = fc1.slider("Progress %",         0, 100, 60)
         assign_r = fc2.slider("Assignment Ratio %",  0, 100, 75)
         kc_pct   = fc3.slider("KC Score %",          0, 100, 70)
         test_pct_in = fc4.slider("Test Score %",     0, 100, 65)
+        
+        st.markdown("**2. Specialized Domain Practice (Hours)**")
+        h1, h2, h3, h4 = st.columns(4)
+        h_sql = h1.number_input("SQL", 0.0, 200.0, 10.0)
+        h_pyspark = h2.number_input("PySpark", 0.0, 200.0, 5.0)
+        h_numpy = h3.number_input("NumPy/Pandas", 0.0, 200.0, 8.0)
+        h_bi = h4.number_input("BI/Reporting", 0.0, 200.0, 2.0)
+        
+        st.markdown("**3. Prediction Context**")
+        courses = [
+            "Basic SQL", "Basic Python Programming", 
+            "Data Processing using NumPy & Pandas", 
+            "Data Processing using PySpark", 
+            "Introduction to Data Engineering & Big Data"
+        ]
+        course_name = st.selectbox("Select Course (One-Hot Encoded Feature)", courses)
+        
         submitted = st.form_submit_button("Predict")
 
     if submitted:
         try:
             from ml.predict import classify_intern_status, predict_test_score
-            status_result = classify_intern_status(prog_pct, assign_r / 100, kc_pct, test_pct_in)
-            pred_score    = predict_test_score(prog_pct, kc_pct, assign_r / 100)
+            kwargs = {
+                "progress_pct": prog_pct,
+                "assignment_ratio": assign_r / 100,
+                "kc_pct": kc_pct,
+                "test_pct": test_pct_in,
+                "hours_sql": h_sql,
+                "hours_pyspark": h_pyspark,
+                "hours_numpy": h_numpy,
+                "hours_bi": h_bi,
+                f"course_name_{course_name}": 1.0
+            }
+            status_result = classify_intern_status(**kwargs)
+            pred_score    = predict_test_score(**kwargs)
             rc1, rc2 = st.columns(2)
             rc1.success(f"Predicted Status: **{status_result['status']}**")
             rc2.info(f"Predicted Test Score: **{pred_score:.1f}%**")
@@ -770,7 +799,7 @@ def render_tab_ml():
 # Tab 7 — GenAI Chatbot
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_chat():
-    display_header("💬 GenAI Chat")
+    display_header("GenAI Chat")
     st.markdown("""
     **Ask natural language questions about intern data.**  
     *Examples:*
@@ -781,8 +810,6 @@ def render_tab_chat():
     - *"Summarize batch progress across all courses"*
     """)
 
-    CHROMA_DIR = os.path.join(ROOT, os.getenv("CHROMA_PERSIST_DIR", "genai/chroma_store"))
-
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
@@ -790,6 +817,9 @@ def render_tab_chat():
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+            if msg.get("sql"):
+                with st.expander("🔍 SQL Executed"):
+                    st.code(msg["sql"], language="sql")
 
     # Input
     user_q = st.chat_input("Ask a question about intern performance…")
@@ -800,36 +830,45 @@ def render_tab_chat():
             st.markdown(user_q)
 
         with st.chat_message("assistant"):
-            with st.spinner("Thinking…"):
-                if not os.path.exists(CHROMA_DIR):
-                    answer = (
-                        "⚠️ Vector store not found. "
-                        "Please run `python -m genai.embeddings` first, "
-                        "then restart the app."
-                    )
-                    sources = []
-                    mode    = "unavailable"
-                else:
-                    try:
-                        from genai.chatbot import ask
-                        result  = ask(user_q)
-                        answer  = result["answer"]
-                        sources = result.get("sources", [])
-                        mode    = result.get("mode", "unknown")
-                    except Exception as e:
-                        answer  = f"Error during retrieval: {e}"
-                        sources = []
-                        mode    = "error"
+            with st.spinner("Generating SQL and querying live data..."):
+                try:
+                    from genai.chatbot import ask
+
+                    @st.cache_data(show_spinner=False, ttl=600)
+                    def cached_ask(q):
+                        return ask(q)
+
+                    result    = cached_ask(user_q)
+                    answer    = result.get("answer", "No answer generated.")
+                    sql_query = result.get("query")
+                    columns   = result.get("columns", [])
+                    rows      = result.get("rows", [])
+                    llm_src   = result.get("llm_source", "")
+                except Exception as e:
+                    answer    = f"Error during query execution: {e}"
+                    sql_query = None
+                    columns, rows, llm_src = [], [], ""
 
             st.markdown(answer)
-            if mode != "unavailable":
-                st.caption(f"Mode: `{mode}` | Sources retrieved: {len(sources)}")
-            if sources:
-                with st.expander("📚 Source chunks"):
-                    for s in sources:
-                        st.markdown(f"- {s[:200]}")
 
-        st.session_state.chat_history.append({"role": "assistant", "content": answer})
+            # ── Render result as interactive dataframe ────────────────────
+            if rows and columns:
+                st.dataframe(
+                    pd.DataFrame(rows, columns=columns),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            # ── Show SQL + LLM source ──────────────────────────────────────
+            meta_cols = st.columns([3, 1])
+            if sql_query:
+                with meta_cols[0].expander("🔍 SQL Executed"):
+                    st.code(sql_query, language="sql")
+            if llm_src:
+                badge = "🟢 HuggingFace" if llm_src == "huggingface" else "🟡 Ollama (local)"
+                meta_cols[1].caption(badge)
+
+        st.session_state.chat_history.append({"role": "assistant", "content": answer, "sql": sql_query})
 
     if st.button("🗑️ Clear Chat"):
         st.session_state.chat_history = []
@@ -837,20 +876,20 @@ def render_tab_chat():
 
 
 # ── Render Allowed Tabs ───────────────────────────────────────────────────────
-if "📊 Warehouse Analysis" in tab_dict:
-    with tab_dict["📊 Warehouse Analysis"]: render_tab_data_quality()
-if "🔍 EDA" in tab_dict:
-    with tab_dict["🔍 EDA"]: render_tab_eda()
-if "👔 Manager Dashboard" in tab_dict:
-    with tab_dict["👔 Manager Dashboard"]: render_tab_manager()
-if "👨‍🏫 Mentor Dashboard" in tab_dict:
-    with tab_dict["👨‍🏫 Mentor Dashboard"]: render_tab_mentor()
-if "🎯 Intern Self-View" in tab_dict:
-    with tab_dict["🎯 Intern Self-View"]: render_tab_intern()
-if "🤖 ML Insights" in tab_dict:
-    with tab_dict["🤖 ML Insights"]: render_tab_ml()
-if "💬 GenAI Chat" in tab_dict:
-    with tab_dict["💬 GenAI Chat"]: render_tab_chat()
+if "Warehouse Analysis" in tab_dict:
+    with tab_dict["Warehouse Analysis"]: render_tab_data_quality()
+if "EDA" in tab_dict:
+    with tab_dict["EDA"]: render_tab_eda()
+if "Manager Dashboard" in tab_dict:
+    with tab_dict["Manager Dashboard"]: render_tab_manager()
+if "Mentor Dashboard" in tab_dict:
+    with tab_dict["Mentor Dashboard"]: render_tab_mentor()
+if "Intern Self-View" in tab_dict:
+    with tab_dict["Intern Self-View"]: render_tab_intern()
+if "ML Insights" in tab_dict:
+    with tab_dict["ML Insights"]: render_tab_ml()
+if "GenAI Chat" in tab_dict:
+    with tab_dict["GenAI Chat"]: render_tab_chat()
 
 
 # ── Sidebar Bottom Details ────────────────────────────────────────────────────
@@ -862,14 +901,14 @@ with st.sidebar:
     
     col1, col2 = st.columns([1, 1])
     with col1:
-        if st.button("Logout", key="logout_btn", type="tertiary", use_container_width=True):
+        if st.button("Logout", key="logout_btn", type="secondary", use_container_width=True):
             st.session_state.logged_in = False
             st.session_state.username = None
             st.session_state.real_name = None
             st.session_state.role = None
             st.rerun()
     with col2:
-        if st.button("Refresh", key="refresh_btn", type="tertiary", use_container_width=True):
+        if st.button("Refresh", key="refresh_btn", type="secondary", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
