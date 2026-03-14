@@ -236,11 +236,21 @@ else:
     tab_dict = {name: tab for name, tab in zip(allowed_tab_names, rendered_tabs)}
 
 
+# ── Common UI Helpers ─────────────────────────────────────────────────────────
+def display_header(text: str):
+    if role == "Manager":
+        import re
+        clean_text = re.sub(r'^[^\w\s]+\s*', '', text).strip()
+        st.header(clean_text)
+    else:
+        st.header(text)
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # Tab 1 — Data Quality Dashboard
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_data_quality():
-    st.header("📊 Warehouse Analysis")
+    display_header("📊 Warehouse Analysis")
 
     # Row counts per layer
     st.subheader("Row Counts — Medallion Architecture")
@@ -316,7 +326,7 @@ def render_tab_data_quality():
 # Tab 2 — EDA Dashboard
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_eda():
-    st.header("🔍 Exploratory Data Analysis")
+    display_header("🔍 Exploratory Data Analysis")
 
     col1, col2 = st.columns(2)
 
@@ -343,8 +353,9 @@ def render_tab_eda():
         fig.update_layout(yaxis={"categoryorder": "total ascending"})
         st.plotly_chart(fig, use_container_width=True)
 
-    # Weekly hours heatmap (intern × week)
-    st.subheader("Weekly Hours Heatmap (Intern × Week)")
+    # Weekly hours trend (intern × week)
+    st.markdown("---")
+    st.subheader("Weekly Hours Trend (Compare Interns)")
     heat_df = q("""
         SELECT full_name, year || '-W' || LPAD(CAST(week_number AS VARCHAR), 2, '0') AS week_label,
                total_hours
@@ -352,12 +363,21 @@ def render_tab_eda():
         ORDER BY week_label, full_name
     """)
     if not heat_df.empty:
-        pivot = heat_df.pivot_table(index="full_name", columns="week_label",
-                                    values="total_hours", fill_value=0)
-        fig = px.imshow(pivot, color_continuous_scale="Blues", aspect="auto",
-                        title="Weekly Hours per Intern (Jan–Mar 2026)")
-        fig.update_layout(height=600)
-        st.plotly_chart(fig, use_container_width=True)
+        all_interns = heat_df["full_name"].unique().tolist()
+        top5 = heat_df.groupby("full_name")["total_hours"].sum().nlargest(3).index.tolist()
+        
+        selected_interns = st.multiselect("Select Interns to Compare", options=all_interns, default=top5)
+        
+        if selected_interns:
+            filtered_df = heat_df[heat_df["full_name"].isin(selected_interns)]
+            fig = px.line(filtered_df, x="week_label", y="total_hours", color="full_name",
+                          markers=True, title="Weekly Hours Comparison")
+            fig.update_layout(height=450)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Please select at least one intern to view the trend.")
+    
+    st.markdown("---")
 
     col3, col4 = st.columns(2)
     with col3:
@@ -392,7 +412,7 @@ def render_tab_eda():
 # Tab 3 — Manager View
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_manager():
-    st.header("👔 Manager Dashboard")
+    display_header("👔 Manager Dashboard")
 
     # Intern leaderboard
     lb_df = q("""
@@ -456,7 +476,7 @@ def render_tab_manager():
 # Tab 4 — Mentor View
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_mentor():
-    st.header("👨‍🏫 Mentor Dashboard")
+    display_header("👨‍🏫 Mentor Dashboard")
 
     if st.session_state.role == "Mentor":
         selected_mentor = st.session_state.real_name
@@ -536,7 +556,7 @@ def render_tab_mentor():
 # Tab 5 — Intern View
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_intern():
-    st.header("🎯 Intern Self-View Dashboard")
+    display_header("🎯 Intern Self-View")
 
     if st.session_state.role == "Intern":
         selected_intern = st.session_state.real_name
@@ -636,7 +656,7 @@ def render_tab_intern():
 # Tab 6 — ML Insights
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_ml():
-    st.header("🤖 ML Insights")
+    display_header("🤖 ML Insights")
 
     MODELS_DIR = os.path.join(ROOT, "ml", "models")
 
@@ -750,7 +770,7 @@ def render_tab_ml():
 # Tab 7 — GenAI Chatbot
 # ════════════════════════════════════════════════════════════════════════════
 def render_tab_chat():
-    st.header("💬 GenAI RAG Chatbot")
+    display_header("💬 GenAI Chat")
     st.markdown("""
     **Ask natural language questions about intern data.**  
     *Examples:*
