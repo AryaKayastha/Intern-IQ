@@ -280,7 +280,7 @@ def render_tab_data_quality():
         rows, labels = [], []
         for tbl, label in tables:
             try:
-                n = get_conn().execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+                n = q(f"SELECT COUNT(*) FROM {tbl}").iloc[0, 0]
             except Exception:
                 n = 0
             rows.append(n)

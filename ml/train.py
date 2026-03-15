@@ -59,8 +59,7 @@ def load_data(con: duckdb.DuckDBPyConnection) -> tuple[pd.DataFrame, pd.DataFram
             f.assignment_ratio,
             f.kc_pct, 
             f.test_pct,
-            f.overall_status,
-            f.data_source
+            f.overall_status
         FROM fact_lms_progress f
         JOIN dim_course c ON f.course_id = c.course_id
         JOIN dim_intern i ON f.intern_id = i.intern_id
@@ -87,14 +86,13 @@ def load_data(con: duckdb.DuckDBPyConnection) -> tuple[pd.DataFrame, pd.DataFram
         SELECT 
             i.intern_id,
             i.full_name,
-            i.data_source,
             COALESCE(SUM(f.hours), 0) AS total_hours,
             COUNT(DISTINCT f.activity_id) AS distinct_activities,
             SUM(CASE WHEN d.day_of_week IN ('Saturday', 'Sunday') THEN f.hours ELSE 0 END) AS weekend_hours
         FROM dim_intern i
         LEFT JOIN fact_eod_log f ON i.intern_id = f.intern_id
         LEFT JOIN dim_date d ON f.date = d.date
-        GROUP BY i.intern_id, i.full_name, i.data_source
+        GROUP BY i.intern_id, i.full_name
     """).df()
     
     # Merge domain hours directly into the performance df for clustering
@@ -128,7 +126,7 @@ def train_classifier(prog_df: pd.DataFrame) -> dict:
     """
     Features: progress_pct, assignment_ratio, kc_pct, test_pct (from gold_course_progress)
     Target  : overall_status (Completed / In Progress / Not Started)
-    Validate: on real-only rows
+    Target  : overall_status (Completed / In Progress / Not Started)
     """
     print("\n--- Model 1: Performance Classifier ---")
     df = prog_df.copy()
@@ -166,19 +164,12 @@ def train_classifier(prog_df: pd.DataFrame) -> dict:
     ])
     clf.fit(X, y)
 
-    # Evaluate on real-only rows
-    real_df = df[df["data_source"] == "real"].copy()
-    if len(real_df) > 5:
-        X_real  = real_df[feature_cols].values
-        y_real  = real_df["status_enc"].values
-        y_pred  = clf.predict(X_real)
-        acc     = accuracy_score(y_real, y_pred)
-        print(f"  Accuracy on real-only rows: {acc:.2%}")
-        print(f"  Classes: {le.classes_.tolist()}")
-        print(f"  Confusion Matrix:\n{confusion_matrix(y_real, y_pred)}")
-    else:
-        acc = accuracy_score(y, clf.predict(X))
-        print(f"  Accuracy (all data): {acc:.2%}")
+    # Evaluate on all rows
+    y_pred = clf.predict(X)
+    acc = accuracy_score(y, y_pred)
+    print(f"  Accuracy (all data): {acc:.2%}")
+    print(f"  Classes: {le.classes_.tolist()}")
+    print(f"  Confusion Matrix:\n{confusion_matrix(y, y_pred)}")
 
     # Save
     joblib.dump(clf, os.path.join(MODELS_DIR, "classifier.pkl"))
@@ -244,7 +235,7 @@ def train_clustering(perf_df: pd.DataFrame) -> dict:
                           "total_hours", "distinct_activities",
                           "avg_progress_pct", "avg_assignment_ratio",
                           "avg_kc_pct", "avg_test_pct",
-                          "total_activity_entries", "courses_completed", "data_source"]].copy()
+                          "total_activity_entries", "courses_completed"]].copy()
     cluster_result.to_parquet(os.path.join(MODELS_DIR, "cluster_results.parquet"), index=False)
     print("  Saved: ml/models/kmeans_pipeline.pkl, ml/models/cluster_results.parquet")
     return {"pipeline": pipeline, "cluster_label_map": cluster_label_map, "cluster_df": cluster_result}
@@ -258,7 +249,7 @@ def train_regression(prog_df: pd.DataFrame) -> dict:
     """
     Features: progress_pct, kc_pct, assignment_ratio
     Target  : test_pct (overall test score %)
-    Validate: real-only rows
+    Target  : test_pct (overall test score %)
     """
     print("\n--- Model 3: Test Score Regressor (Ridge) ---")
     df = prog_df.dropna(subset=["test_pct"]).copy()
@@ -292,25 +283,16 @@ def train_regression(prog_df: pd.DataFrame) -> dict:
     ])
     reg.fit(X, y)
 
-    # Evaluate on real-only rows
-    real_df = df[df["data_source"] == "real"].copy()
-    if len(real_df) > 3:
-        X_r = real_df[feature_cols].values
-        y_r = real_df["test_pct"].values
-        y_p = reg.predict(X_r)
-        r2  = r2_score(y_r, y_p)
-        mae = mean_absolute_error(y_r, y_p)
-        print(f"  Real-only R²: {r2:.3f}  |  MAE: {mae:.2f}%")
-    else:
-        y_p = reg.predict(X)
-        r2  = r2_score(y, y_p)
-        mae = mean_absolute_error(y, y_p)
-        print(f"  R² (all data): {r2:.3f}  |  MAE: {mae:.2f}%")
+    # Evaluate on all rows
+    y_p = reg.predict(X)
+    r2  = r2_score(y, y_p)
+    mae = mean_absolute_error(y, y_p)
+    print(f"  R² (all data): {r2:.3f}  |  MAE: {mae:.2f}%")
 
     # Save predictions alongside actuals for dashboard
     df["predicted_test_pct"] = reg.predict(X)
     pred_df = df[["intern_id", "full_name", "course_name",
-                  "test_pct", "predicted_test_pct", "data_source"]].copy()
+                  "test_pct", "predicted_test_pct"]].copy()
     pred_df.to_parquet(os.path.join(MODELS_DIR, "regression_results.parquet"), index=False)
 
     joblib.dump(reg, os.path.join(MODELS_DIR, "regressor.pkl"))
@@ -342,7 +324,7 @@ def compute_pca(perf_df: pd.DataFrame, cluster_df: pd.DataFrame) -> None:
     df["pca_y"] = coords[:, 1]
 
     pca_df = df[["intern_id", "pca_x", "pca_y"]].merge(
-        cluster_df[["intern_id", "cluster_label", "data_source", "full_name"]],
+        cluster_df[["intern_id", "cluster_label", "full_name"]],
         on="intern_id", how="left"
     )
     pca_df.to_parquet(os.path.join(MODELS_DIR, "pca_results.parquet"), index=False)
@@ -365,7 +347,7 @@ def run_training() -> None:
     reg_result  = train_regression(prog_df)
     compute_pca(perf_df, clust_result["cluster_df"])
 
-    print("\n✅ All models trained and saved to ml/models/\n")
+    print("\n[SUCCESS] All models trained and saved to ml/models/\n")
 
 
 if __name__ == "__main__":

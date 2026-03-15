@@ -85,7 +85,7 @@ def clean_eod(df: pd.DataFrame) -> pd.DataFrame:
     # --- Drop raw columns, keep clean ones ---
     clean_cols = [
         "intern_id", "full_name", "First Name", "Last Name",
-        "date", "activity", "hours", "hours_outlier_flag", "data_source"
+        "date", "activity", "hours", "hours_outlier_flag"
     ]
     return df[clean_cols].rename(columns={"First Name": "first_name", "Last Name": "last_name"})
 
@@ -193,7 +193,6 @@ def clean_lms(df: pd.DataFrame, course_name_override: str | None = None) -> pd.D
         "reviewed", "submitted", "reviewed_pct",
         "overall_status",
         "mentor_name_raw",
-        "data_source",
     ]
     # Only keep columns that were actually created
     existing = [c for c in clean_cols if c in df.columns]

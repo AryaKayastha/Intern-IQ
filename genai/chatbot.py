@@ -130,17 +130,15 @@ CREATE TABLE gold_course_progress (
     kc_pct           DOUBLE,    -- knowledge-check score 0-100
     test_pct         DOUBLE,    -- test score 0-100
     completed_count  DOUBLE,
-    total_assignments DOUBLE,
-    data_source      VARCHAR    -- 'real' | 'synthetic'
+    total_assignments DOUBLE
 );
 
 -- TABLE 2: gold_intern_performance
--- USE FOR: overall intern leaderboard, total hours across all activities,
---          average scores across all courses, courses completed count.
+-- USE FOR: overall intern leaderboard, "best intern", total hours across all activities,
+--          average scores across all courses, total number of courses completed.
 CREATE TABLE gold_intern_performance (
     intern_id              VARCHAR,
     full_name              VARCHAR,
-    data_source            VARCHAR,  -- 'real' | 'synthetic'
     total_hours            DOUBLE,
     total_activity_entries BIGINT,
     distinct_activities    BIGINT,
@@ -173,7 +171,17 @@ STRICT RULES:
 1. Return ONLY the raw SQL — no markdown, no backticks, no explanation at all.
 2. Choose the table based on the routing comments in the schema.
 3. ALWAYS include full_name in the SELECT list so results are human-readable.
-4. NEVER select intern_id as a standalone output column — it is an internal key, not meaningful to users.
+4. ALWAYS include the data field the user is asking about in the SELECT. Examples:
+   - "progress" questions → include progress_pct AND course_name
+   - "knowledge check / KC score" → include kc_pct AND course_name
+   - "test score" → include test_pct AND course_name
+   - "assignment" → include assignment_ratio (or completed_count, total_assignments) AND course_name
+   - "hours" questions → include total_hours (or hours)
+   - "activity" questions → include activity_name AND hours
+   - "mentor / mentee" questions → include mentor_name
+   - "status" questions → include overall_status AND course_name
+   - "weekly" questions → include week_number, year, total_hours
+5. NEVER select intern_id as a standalone output column — it is an internal key, not meaningful to users.
 5. Use ILIKE '%term%' for ALL string comparisons to handle typos.
 6. Course synonyms:
    - "SQL"           → course_name ILIKE '%SQL%'
@@ -182,12 +190,18 @@ STRICT RULES:
    - "NumPy/Pandas"  → course_name ILIKE '%NumPy%'
    - "Big Data"      → course_name ILIKE '%Big Data%' OR course_name ILIKE '%Engineering%'
 7. Status synonyms:
-   - "completed"    → overall_status = 'Completed'
-   - "in progress"  → overall_status = 'In Progress'
+   - "completed" course   → overall_status = 'Completed' (in gold_course_progress or fact_lms_progress)
+   - "in progress" course → overall_status = 'In Progress'
    - "at risk" / "not started" → overall_status = 'Not Started'
 8. "Top performers" per course → ORDER BY progress_pct DESC
-   "Top performers" overall   → ORDER BY total_hours DESC
-9. NEVER filter by data_source unless user explicitly says real or synthetic.
+   "Best intern" or "Top performer overall" → ORDER BY total_hours DESC using gold_intern_performance
+9. TABLE ROUTING:
+   - Aggregated / summary questions → use GOLD tables (gold_course_progress, gold_intern_performance, gold_weekly_hours)
+   - Daily activity detail ("what did X do on date Y") → JOIN fact_eod_log with dim_intern and dim_activity
+   - Per-course raw scores → JOIN fact_lms_progress with dim_intern and dim_course
+   - Mentor-mentee relationships → JOIN bridge_intern_mentor with dim_mentor and dim_intern
+   - When using fact_eod_log, ALWAYS JOIN dim_activity to get activity_name and dim_intern to get full_name
+   - When using fact_lms_progress, ALWAYS JOIN dim_course to get course_name and dim_intern to get full_name
 10. Always end with LIMIT 50.
 11. Today is {today_date}. Convert relative dates to exact SQL date filters.
 12. If the question is unrelated to interns, courses, or performance, return exactly: OUT_OF_CONTEXT
@@ -229,7 +243,19 @@ def run_sql(sql: str):
     try:
         con = duckdb.connect(DB_PATH, read_only=True)
         cur = con.execute(sql)
-        rows = cur.fetchall()
+        raw_rows = cur.fetchall()
+        import math
+        rows = []
+        for r in raw_rows:
+            cleaned = []
+            for v in r:
+                if isinstance(v, float) and math.isnan(v):
+                    cleaned.append(None)
+                elif isinstance(v, (int, float, str, bool, type(None))):
+                    cleaned.append(v)
+                else:
+                    cleaned.append(str(v))  # Prevent lists, tuples, or complex duckdb types crashing React
+            rows.append(tuple(cleaned))
         cols = [d[0] for d in cur.description] if cur.description else []
         con.close()
         return cols, rows, None

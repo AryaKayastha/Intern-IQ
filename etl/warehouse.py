@@ -42,9 +42,9 @@ def build_silver(con: duckdb.DuckDBPyConnection,
 
     # ── dim_intern ──────────────────────────────────────────────────────────
     # Gather unique interns from EOD + all LMS
-    eod_interns = eod_clean[["intern_id", "full_name", "first_name", "last_name", "data_source"]].drop_duplicates()
+    eod_interns = eod_clean[["intern_id", "full_name", "first_name", "last_name"]].drop_duplicates()
     lms_interns = pd.concat([
-        df[["intern_id", "full_name", "data_source"]] for df in lms_map.values()
+        df[["intern_id", "full_name"]] for df in lms_map.values()
     ]).drop_duplicates(subset=["intern_id"], keep="first")
     lms_interns["first_name"] = lms_interns["full_name"].str.split().str[0]
     lms_interns["last_name"]  = lms_interns["full_name"].str.split().str[1:].str.join(" ")
@@ -56,7 +56,7 @@ def build_silver(con: duckdb.DuckDBPyConnection,
     )
     con.execute("DROP TABLE IF EXISTS dim_intern")
     con.execute("CREATE TABLE dim_intern AS SELECT * FROM dim_intern")
-    print(f"  ✔ dim_intern: {len(dim_intern)} interns")
+    print(f"  [SUCCESS] dim_intern: {len(dim_intern)} interns")
 
     # ── dim_course ──────────────────────────────────────────────────────────
     course_rows = []
@@ -74,7 +74,7 @@ def build_silver(con: duckdb.DuckDBPyConnection,
     dim_course = pd.DataFrame(course_rows)
     con.execute("DROP TABLE IF EXISTS dim_course")
     con.execute("CREATE TABLE dim_course AS SELECT * FROM dim_course")
-    print(f"  ✔ dim_course: {len(dim_course)} courses")
+    print(f"  [SUCCESS] dim_course: {len(dim_course)} courses")
 
     # ── dim_mentor ──────────────────────────────────────────────────────────
     unique_mentors = mentor_df[["mentor_name"]].drop_duplicates()
@@ -82,7 +82,7 @@ def build_silver(con: duckdb.DuckDBPyConnection,
     dim_mentor = unique_mentors[["mentor_id", "mentor_name"]].reset_index(drop=True)
     con.execute("DROP TABLE IF EXISTS dim_mentor")
     con.execute("CREATE TABLE dim_mentor AS SELECT * FROM dim_mentor")
-    print(f"  ✔ dim_mentor: {len(dim_mentor)} mentors")
+    print(f"  [SUCCESS] dim_mentor: {len(dim_mentor)} mentors")
 
     # ── dim_activity ────────────────────────────────────────────────────────
     activity_names = eod_clean["activity"].dropna().unique()
@@ -107,7 +107,7 @@ def build_silver(con: duckdb.DuckDBPyConnection,
     })
     con.execute("DROP TABLE IF EXISTS dim_activity")
     con.execute("CREATE TABLE dim_activity AS SELECT * FROM dim_activity")
-    print(f"  ✔ dim_activity: {len(dim_activity)} activity types")
+    print(f"  [SUCCESS] dim_activity: {len(dim_activity)} activity types")
 
     # ── dim_date ────────────────────────────────────────────────────────────
     all_dates = eod_clean["date"].dropna().dt.date.unique()
@@ -121,7 +121,7 @@ def build_silver(con: duckdb.DuckDBPyConnection,
     })
     con.execute("DROP TABLE IF EXISTS dim_date")
     con.execute("CREATE TABLE dim_date AS SELECT * FROM dim_date")
-    print(f"  ✔ dim_date: {len(dim_date)} distinct dates")
+    print(f"  [SUCCESS] dim_date: {len(dim_date)} distinct dates")
 
     # ── bridge_intern_mentor ─────────────────────────────────────────────────
     bridge = mentor_df.merge(
@@ -131,7 +131,7 @@ def build_silver(con: duckdb.DuckDBPyConnection,
     )[["intern_id", "course_id", "mentor_id"]].drop_duplicates()
     con.execute("DROP TABLE IF EXISTS bridge_intern_mentor")
     con.execute("CREATE TABLE bridge_intern_mentor AS SELECT * FROM bridge")
-    print(f"  ✔ bridge_intern_mentor: {len(bridge)} rows")
+    print(f"  [SUCCESS] bridge_intern_mentor: {len(bridge)} rows")
 
     # ── fact_eod_log ────────────────────────────────────────────────────────
     fact_eod = eod_clean.merge(
@@ -142,11 +142,11 @@ def build_silver(con: duckdb.DuckDBPyConnection,
     fact_eod["date_only"] = fact_eod["date"].dt.date
     fact_eod = fact_eod[[
         "log_id", "intern_id", "date_only", "activity_id",
-        "hours", "hours_outlier_flag", "data_source"
+        "hours", "hours_outlier_flag"
     ]].rename(columns={"date_only": "date"})
     con.execute("DROP TABLE IF EXISTS fact_eod_log")
     con.execute("CREATE TABLE fact_eod_log AS SELECT * FROM fact_eod")
-    print(f"  ✔ fact_eod_log: {len(fact_eod)} rows")
+    print(f"  [SUCCESS] fact_eod_log: {len(fact_eod)} rows")
 
     # ── fact_lms_progress ───────────────────────────────────────────────────
     lms_all = []
@@ -165,13 +165,13 @@ def build_silver(con: duckdb.DuckDBPyConnection,
         "completed_count", "total_assignments", "assignment_ratio",
         "kc_score", "kc_max", "kc_pct",
         "test_score", "test_max", "test_pct",
-        "overall_status", "data_source",
+        "overall_status",
     ]
     existing = [c for c in keep_cols if c in fact_lms.columns]
     fact_lms = fact_lms[existing]
     con.execute("DROP TABLE IF EXISTS fact_lms_progress")
     con.execute("CREATE TABLE fact_lms_progress AS SELECT * FROM fact_lms")
-    print(f"  ✔ fact_lms_progress: {len(fact_lms)} rows")
+    print(f"  [SUCCESS] fact_lms_progress: {len(fact_lms)} rows")
 
 
 # ============================================================================
@@ -204,7 +204,7 @@ def build_gold(con: duckdb.DuckDBPyConnection) -> None:
         ORDER BY f.intern_id, d.year, d.week_number
     """)
     n = con.execute("SELECT COUNT(*) FROM gold_weekly_hours").fetchone()[0]
-    print(f"  ✔ gold_weekly_hours: {n} rows")
+    print(f"  [SUCCESS] gold_weekly_hours: {n} rows")
 
     # ── gold_activity_summary ────────────────────────────────────────────────
     con.execute("DROP TABLE IF EXISTS gold_activity_summary")
@@ -217,15 +217,14 @@ def build_gold(con: duckdb.DuckDBPyConnection) -> None:
             a.activity_category,
             COUNT(*)          AS activity_count,
             SUM(f.hours)      AS total_hours,
-            AVG(f.hours)      AS avg_hours,
-            f.data_source
+            AVG(f.hours)      AS avg_hours
         FROM fact_eod_log f
         JOIN dim_intern  i ON f.intern_id  = i.intern_id
         JOIN dim_activity a ON f.activity_id = a.activity_id
-        GROUP BY f.intern_id, i.full_name, a.activity_name, a.activity_category, f.data_source
+        GROUP BY f.intern_id, i.full_name, a.activity_name, a.activity_category
     """)
     n = con.execute("SELECT COUNT(*) FROM gold_activity_summary").fetchone()[0]
-    print(f"  ✔ gold_activity_summary: {n} rows")
+    print(f"  [SUCCESS] gold_activity_summary: {n} rows")
 
     # ── gold_course_progress ─────────────────────────────────────────────────
     con.execute("DROP TABLE IF EXISTS gold_course_progress")
@@ -241,14 +240,13 @@ def build_gold(con: duckdb.DuckDBPyConnection) -> None:
             f.kc_pct,
             f.test_pct,
             f.completed_count,
-            f.total_assignments,
-            f.data_source
+            f.total_assignments
         FROM fact_lms_progress f
         JOIN dim_intern i ON f.intern_id = i.intern_id
         JOIN dim_course c ON f.course_id  = c.course_id
     """)
     n = con.execute("SELECT COUNT(*) FROM gold_course_progress").fetchone()[0]
-    print(f"  ✔ gold_course_progress: {n} rows")
+    print(f"  [SUCCESS] gold_course_progress: {n} rows")
 
     # ── gold_intern_performance ──────────────────────────────────────────────
     con.execute("DROP TABLE IF EXISTS gold_intern_performance")
@@ -257,7 +255,6 @@ def build_gold(con: duckdb.DuckDBPyConnection) -> None:
         SELECT
             i.intern_id,
             i.full_name,
-            i.data_source,
             COALESCE(e.total_hours,     0)   AS total_hours,
             COALESCE(e.activity_count,  0)   AS total_activity_entries,
             COALESCE(e.distinct_activities, 0) AS distinct_activities,
@@ -289,7 +286,7 @@ def build_gold(con: duckdb.DuckDBPyConnection) -> None:
         ) l ON i.intern_id = l.intern_id
     """)
     n = con.execute("SELECT COUNT(*) FROM gold_intern_performance").fetchone()[0]
-    print(f"  ✔ gold_intern_performance: {n} rows")
+    print(f"  [SUCCESS] gold_intern_performance: {n} rows")
 
     # ── gold_mentor_workload ─────────────────────────────────────────────────
     con.execute("DROP TABLE IF EXISTS gold_mentor_workload")
@@ -310,7 +307,7 @@ def build_gold(con: duckdb.DuckDBPyConnection) -> None:
         GROUP BY m.mentor_id, m.mentor_name, c.course_name
     """)
     n = con.execute("SELECT COUNT(*) FROM gold_mentor_workload").fetchone()[0]
-    print(f"  ✔ gold_mentor_workload: {n} rows")
+    print(f"  [SUCCESS] gold_mentor_workload: {n} rows")
 
 
 # ============================================================================
@@ -339,14 +336,14 @@ def print_quality_report(con: duckdb.DuckDBPyConnection,
             except Exception:
                 print(f"    {t}: (not available)")
 
-    # Real vs synthetic split in EOD
-    splits = con.execute("""
-        SELECT data_source, COUNT(*) AS cnt
-        FROM raw_eod_activities GROUP BY data_source
+    # Row counts
+    data_source_dist = con.execute("""
+        SELECT COUNT(*) AS cnt
+        FROM raw_eod_activities
     """).df()
-    print("\n  EOD real vs synthetic split:")
-    for _, row in splits.iterrows():
-        print(f"    {row['data_source']}: {row['cnt']} rows")
+    print("\n  EOD total rows:")
+    for _, row in data_source_dist.iterrows():
+        print(f"    Total: {row['cnt']} rows")
 
     # Outlier flags
     n_outliers = con.execute(
@@ -391,7 +388,7 @@ def run_warehouse() -> None:
     # Step 2 – Clean
     print("\n=== Cleaning Data ===")
     eod_clean = clean_eod(eod_raw)
-    print(f"  ✔ EOD cleaned: {len(eod_clean)} rows")
+    print(f"  [SUCCESS] EOD cleaned: {len(eod_clean)} rows")
 
     COURSE_NAMES = {
         "python":       "Basic Python Programming",
@@ -404,7 +401,7 @@ def run_warehouse() -> None:
         cleaned = clean_lms(df, course_name_override=COURSE_NAMES[key])
         cleaned["course_key"] = key
         lms_map[key] = cleaned
-        print(f"  ✔ LMS [{key}] cleaned: {len(cleaned)} rows")
+        print(f"  [SUCCESS] LMS [{key}] cleaned: {len(cleaned)} rows")
 
     # Explode mentors
     mentor_parts = [
@@ -418,7 +415,7 @@ def run_warehouse() -> None:
     build_gold(con)
     print_quality_report(con, eod_clean, lms_map)
     con.close()
-    print("\n✅ Warehouse build complete.\n")
+    print("\n[SUCCESS] Warehouse build complete.\n")
 
 
 if __name__ == "__main__":
